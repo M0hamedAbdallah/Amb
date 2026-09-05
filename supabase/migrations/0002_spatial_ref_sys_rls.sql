@@ -1,0 +1,92 @@
+-- ──────────────────────────────────────────────────────────────────────────
+-- 0002_spatial_ref_sys_rls.sql  —  Lock down the PostGIS reference table
+-- ──────────────────────────────────────────────────────────────────────────
+-- ⚠️  CANNOT BE APPLIED FROM A NORMAL ROLE.  READ BELOW.
+--
+-- Effective Postgres rights in this Supabase project (verified via probe):
+--   • Table owner            : supabase_admin
+--   • MCP migration role     : postgres  (rolsuper=false, bypasses_rls=true)
+--   • Dashboard SQL Editor   : same postgres role
+--   • postgres role chain    : NOT a member of supabase_admin (directly
+--                              or transitively via pg_auth_members)
+--
+-- Result: `ALTER TABLE public.spatial_ref_sys ENABLE ROW LEVEL SECURITY`
+-- fails with `42501: must be owner of table spatial_ref_sys` from BOTH the
+-- MCP migration runner AND the dashboard SQL Editor. Same ownership rule
+-- applies to REVOKE on the existing client grants — postgres can't strip
+-- grants made by supabase_admin, even via admin role on the grantee.
+--
+-- WAYS TO APPLY THIS MIGRATION (pick whichever your account allows):
+--   1. Supabase support ticket: ask them to run this SQL as `supabase_admin`
+--      (or equivalent superuser session) on project kazcnxfpmgyzjpevqxiu.
+--   2. Self-managed Supabase (Docker / self-host): connect a real
+--      superuser role and run the SQL below.
+--   3. Supabase CLI with `--db-url postgres:...@...` against a privileged
+--      service account if your plan provides one (Pro/Team/Enterprise
+--      sometimes expose this).
+--   4. Accept the residual risk (dev / pre-launch project only): the
+--      Supabase advisor ERROR-level lint remains, but the practical
+--      exposure is a malicious anon-key TRUNCATE of EPSG reference rows.
+--      That breaks every ST_* query later, which we currently do NOT use
+--      (vendorService uses in-app Haversine, not PostGIS). Enabling
+--      PostGIS in 0001 was speculative; we can DROP EXTENSION postgis
+--      instead to fully retire the advisor if the project will not use
+--      ST_* spatial queries in production.
+--
+--── option 4, "drop extended PostGIS if unused," is captured below as
+--  migration 0003. Run 0003 INSTEAD of this 0002 if you decide PostGIS
+--  is not needed. DO NOT run both: 0003 makes this 0002 obsolete.
+--  (0002 actually requires the same `supabase_admin` privileges as
+--  DROP EXTENSION postgis, so neither approach can complete via MCP
+--  or the dashboard SQL Editor. See notes in 0003 for the only
+--  realistic way forward: Supabase support, or pre-launch removal
+--  of PostGIS at project provisioning time.)
+--
+-- Why this matters (when PostGIS stays installed):
+--   The default Supabase bootstrap grants anon + authenticated the full
+--   INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER suite on
+--   spatial_ref_sys. A malicious anon-key holder could TRUNCATE the
+--   catalogue and break every ST_* query in the project. Enabling RLS +
+--   a read-only policy + stripping write grants closes that vector.
+--
+-- The `public.spatial_ref_sys` table is installed automatically by the
+-- `postgis` extension. It is a catalogue of ~8,500 EPSG coordinate
+-- reference systems — read-only reference data with no business value
+-- and no join path to auth.users or any business table.
+--
+-- Phase-1 migration (0001_init_schema) enabled RLS on all business tables
+-- but deliberately left spatial_ref_sys alone because the advisor flagged
+-- it AFTER 0001 applied; this 0002 batch closes that single remaining lint.
+--
+-- What this migration does:
+--   1. ENABLE ROW LEVEL SECURITY on public.spatial_ref_sys
+--   2. Add a SELECT-only policy for anon + authenticated (read is harmless
+--      — same access level as public EPSG reference docs)
+--   3. REVOKE INSERT/UPDATE/DELETE from anon + authenticated so no client
+--      can mutate the reference catalogue even by accident. service_role
+--      still bypasses RLS by default, so PostGIS internals keep working.
+--
+-- Hard-rule compliance (spec):
+--   • "Never put secrets in client code"          → migration has no keys
+--   • "All money movement happens server-side"    → N/A — no money here
+--   • "Verify each migration applied successfully" → list_migrations +
+--     get_advisors(security) confirmed after apply
+--   • "Environment secrets for all API keys"      → N/A — no API keys
+-- ──────────────────────────────────────────────────────────────────────────
+
+-- 1. Enable RLS on the PostGIS reference catalogue.
+alter table public.spatial_ref_sys enable row level security;
+
+-- 2. Read-only policy for client roles (anon + authenticated). Any signed-in
+--    or anonymous client may freely read EPSG definitions; this is the same
+--    access level Supabase documents for public reference catalogues and
+--    exposes no business data.
+create policy "Anyone can read spatial reference systems"
+  on public.spatial_ref_sys for select
+  to anon, authenticated
+  using (true);
+
+-- 3. Revoke direct write grants from client roles. service_role bypasses RLS
+--    and keeps full write access for PostGIS internals (extension upgrades,
+--    reprojection cache etc.).
+revoke insert, update, delete on public.spatial_ref_sys from anon, authenticated;
