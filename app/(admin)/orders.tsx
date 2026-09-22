@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, RefreshControl } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { orderService, Order } from '@/services/orderService';
 import { OrderCard } from '@/components/feature/OrderCard';
+import { queryKeys } from '@/constants/queryKeys';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme';
 
 const MOCK_ORDERS: Partial<Order>[] = [
@@ -25,19 +27,35 @@ const STATUS_FILTERS = [
 
 export default function AdminOrdersScreen() {
   const insets = useSafeAreaInsets();
-  const [orders, setOrders] = useState<Partial<Order>[]>(MOCK_ORDERS);
+  const queryClient = useQueryClient();
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
-  const [refreshing, setRefreshing] = useState(false);
 
-  const loadOrders = async () => {
-    const { orders: real } = await orderService.getAllOrders(100);
-    if (real.length > 0) setOrders(real);
-  };
+  // Orders are live data (status changes minute to minute) — rely on the
+  // default 60s staleTime and let realtime events invalidate. Mock orders are
+  // kept as the fallback so the screen never shows a demo-empty state in dev
+  // before any real orders exist.
+  const { data: orders, refetch, isRefetching } = useQuery({
+    queryKey: queryKeys.orders.all,
+    queryFn: async () => {
+      const { orders: real } = await orderService.getAllOrders(100);
+      return real.length > 0 ? real : MOCK_ORDERS;
+    },
+  });
 
-  useEffect(() => { loadOrders(); }, []);
+  // A new order or a status change anywhere → refetch the monitoring list.
+  // This replaces only the query invalidation; the realtime transport itself
+  // is unchanged (subscribe/unsubscribe in the service, as before).
+  useEffect(() => {
+    const channel = orderService.subscribeToAllOrders(() => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.orders.all });
+    });
+    return () => { channel.unsubscribe(); };
+  }, [queryClient]);
 
-  const filtered = orders.filter((o) =>
+  const list = orders ?? MOCK_ORDERS;
+
+  const filtered = list.filter((o) =>
     (filter === 'all' || o.status === filter) &&
     (search ? (o.delivery_address || '').includes(search) || (o.customer as any)?.name?.includes(search) : true)
   );
@@ -52,7 +70,7 @@ export default function AdminOrdersScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
         <Text style={styles.title}>مراقبة الطلبات</Text>
-        <Text style={styles.count}>{orders.length} طلب</Text>
+        <Text style={styles.count}>{list.length} طلب</Text>
       </View>
 
       {/* Summary */}
@@ -84,6 +102,7 @@ export default function AdminOrdersScreen() {
         horizontal
         data={STATUS_FILTERS}
         keyExtractor={(f) => f.id}
+        style={styles.chipsList}
         renderItem={({ item }) => (
           <TouchableOpacity
             onPress={() => setFilter(item.id)}
@@ -106,8 +125,8 @@ export default function AdminOrdersScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={(
           <RefreshControl
-            refreshing={refreshing}
-            onRefresh={async () => { await loadOrders(); setRefreshing(false); }}
+            refreshing={isRefetching}
+            onRefresh={() => { refetch(); }}
             tintColor={'#8B5CF6'}
             colors={['#8B5CF6']}
             progressBackgroundColor={Colors.surface}
@@ -133,7 +152,8 @@ const styles = StyleSheet.create({
   summaryLabel: { color: Colors.textMuted, fontSize: FontSize.xs, textAlign: 'center', marginTop: 2 },
   searchBox: { flexDirection: 'row-reverse', alignItems: 'center', backgroundColor: Colors.surface, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, marginHorizontal: Spacing.md, paddingHorizontal: Spacing.md, height: 44, gap: Spacing.sm, marginBottom: Spacing.sm },
   searchInput: { flex: 1, color: Colors.text, fontSize: FontSize.base },
-  chips: { paddingHorizontal: Spacing.md, gap: Spacing.sm, paddingVertical: Spacing.sm },
+  chipsList: { flexGrow: 0, height: 44 },
+  chips: { paddingHorizontal: Spacing.md, gap: Spacing.sm, alignItems: 'center' },
   chip: { paddingHorizontal: Spacing.md, paddingVertical: 7, borderRadius: Radius.full, backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border },
   chipActive: { backgroundColor: '#8B5CF6', borderColor: '#8B5CF6' },
   chipText: { color: Colors.textMuted, fontSize: FontSize.sm },

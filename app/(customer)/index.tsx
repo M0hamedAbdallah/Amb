@@ -378,6 +378,7 @@ const styles = StyleSheet.create({
     // short labels ("الكل") and long labels ("الأعلى تقييمًا") both render
     // fully readable without compressing the chip's measured width.
     minWidth: 56,
+    maxHeight: 36,
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
     borderRadius: Radius.full,

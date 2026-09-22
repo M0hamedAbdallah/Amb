@@ -7,8 +7,10 @@ import { LogBox, Platform } from 'react-native';
 // here would flip Yoga's row direction after the restart it triggers and
 // double-mirror every hand-mirrored row, so it must stay disabled.
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { StatusBar } from 'expo-status-bar';
 import { AuthProvider } from '@/contexts/AuthContext';
+import { queryClient } from '@/services/queryClient';
 import { Colors } from '@/constants/theme';
 
 // The dev-only LogBox "Open debugger to view warnings." sticky toast sits at
@@ -39,23 +41,25 @@ if (Platform.OS !== 'web') {
 
 export default function RootLayout() {
   return (
-    <SafeAreaProvider>
-      <AuthProvider>
-        <StatusBar style="light" />
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            contentStyle: { backgroundColor: Colors.bg },
-            animation: Platform.OS === 'ios' ? 'default' : 'fade',
-          }}
-        >
-          <Stack.Screen name="index" />
-          <Stack.Screen name="(auth)" />
-          <Stack.Screen name="(customer)" />
-          <Stack.Screen name="(vendor)" />
-          <Stack.Screen name="(admin)" />
-        </Stack>
-      </AuthProvider>
-    </SafeAreaProvider>
+    <QueryClientProvider client={queryClient}>
+      <SafeAreaProvider>
+        <AuthProvider>
+          <StatusBar style="light" />
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: Colors.bg },
+              animation: Platform.OS === 'ios' ? 'default' : 'fade',
+            }}
+          >
+            <Stack.Screen name="index" />
+            <Stack.Screen name="(auth)" />
+            <Stack.Screen name="(customer)" />
+            <Stack.Screen name="(vendor)" />
+            <Stack.Screen name="(admin)" />
+          </Stack>
+        </AuthProvider>
+      </SafeAreaProvider>
+    </QueryClientProvider>
   );
 }

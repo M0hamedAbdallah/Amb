@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl,
   Modal, TextInput, ActivityIndicator, ScrollView, KeyboardAvoidingView, Platform, Alert,
@@ -6,7 +6,9 @@ import {
 import { useRouter } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { complaintService, Complaint, ComplaintType } from '@/services/complaintService';
+import { queryKeys } from '@/constants/queryKeys';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '@/constants/theme';
 import { Button } from '@/components/ui/Button';
 
@@ -57,32 +59,49 @@ function fmtDate(iso: string): string {
 export default function AdminComplaintsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const [complaints, setComplaints] = useState<Complaint[]>([]);
+  const queryClient = useQueryClient();
   const [filter, setFilter] = useState<'all' | Complaint['status']>('all');
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
 
   const [active, setActive] = useState<Complaint | null>(null);
   const [adminNote, setAdminNote] = useState('');
   const [action, setAction] = useState<'warn' | 'ban_temp' | 'ban_perm' | 'refund' | 'none'>('none');
   const [suspendDays, setSuspendDays] = useState('3');
-  const [resolving, setResolving] = useState(false);
 
-  const load = useCallback(async () => {
-    const { complaints: list } = await complaintService.list(filter === 'all' ? undefined : filter);
-    setComplaints(list);
-  }, [filter]);
+  // Complaints change on user submit, not constantly — 60s default staleTime
+  // is good enough; the resolve mutation invalidates after an admin action.
+  const { data: complaints = [], isLoading, isRefetching, refetch } = useQuery({
+    queryKey: queryKeys.complaints.list(filter === 'all' ? undefined : filter),
+    queryFn: async () => {
+      const { complaints: list } = await complaintService.list(filter === 'all' ? undefined : filter);
+      return list;
+    },
+  });
 
-  useEffect(() => {
-    setLoading(true);
-    load().finally(() => setLoading(false));
-  }, [load]);
-
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    await load();
-    setRefreshing(false);
-  };
+  const resolveMutation = useMutation({
+    mutationFn: async () => {
+      if (!active) throw new Error('no complaint selected');
+      const suspendUntil = action === 'ban_temp'
+        ? new Date(Date.now() + (parseInt(suspendDays) || 3) * 86400000).toISOString()
+        : undefined;
+      const { error } = await complaintService.resolve(
+        active.id,
+        action,
+        adminNote.trim(),
+        suspendUntil
+      );
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      // Invalidate ALL filter variants — a resolved complaint changes status,
+      // so every cached filter list may be stale.
+      queryClient.invalidateQueries({ queryKey: ['complaints'] });
+      closeResolve();
+    },
+    onError: () => {
+      closeResolve();
+      Alert.alert('خطأ', 'تعذّر تنفيذ الإجراء — حاول مجددًا');
+    },
+  });
 
   const openResolve = (c: Complaint) => {
     setActive(c);
@@ -93,29 +112,11 @@ export default function AdminComplaintsScreen() {
 
   const closeResolve = () => {
     setActive(null);
-    setResolving(false);
   };
 
-  const confirmResolve = async () => {
-    if (!active) return;
-    setResolving(true);
-    const suspendUntil = action === 'ban_temp'
-      ? new Date(Date.now() + (parseInt(suspendDays) || 3) * 86400000).toISOString()
-      : undefined;
-    const { error } = await complaintService.resolve(
-      active.id,
-      action,
-      adminNote.trim(),
-      suspendUntil
-    );
-    setResolving(false);
-    if (error) {
-      closeResolve();
-      Alert.alert('خطأ', 'تعذّر تنفيذ الإجراء — حاول مجددًا');
-      return;
-    }
-    closeResolve();
-    await load();
+  const confirmResolve = () => {
+    if (!active || resolveMutation.isPending) return;
+    resolveMutation.mutate();
   };
 
   const filtered = complaints;
@@ -218,8 +219,8 @@ export default function AdminComplaintsScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={(
           <RefreshControl
-            refreshing={refreshing}
-            onRefresh={handleRefresh}
+            refreshing={isRefetching}
+            onRefresh={() => { refetch(); }}
             tintColor={'#8B5CF6'}
             colors={['#8B5CF6']}
             progressBackgroundColor={Colors.surface}
@@ -227,7 +228,7 @@ export default function AdminComplaintsScreen() {
         )}
         ItemSeparatorComponent={() => <View style={{ height: Spacing.sm }} />}
         ListEmptyComponent={
-          loading ? (
+          isLoading ? (
             <View style={styles.loadingBlock}><ActivityIndicator color={'#8B5CF6'} size="large" /></View>
           ) : (
             <View style={styles.empty}>
@@ -248,7 +249,7 @@ export default function AdminComplaintsScreen() {
             <View style={styles.sheetHandle} />
             <View style={styles.sheetHeader}>
               <Text style={styles.sheetTitle}>حل الشكوى</Text>
-              <TouchableOpacity onPress={closeResolve} disabled={resolving} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <TouchableOpacity onPress={closeResolve} disabled={resolveMutation.isPending} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                 <MaterialIcons name="close" size={22} color={Colors.textDim} />
               </TouchableOpacity>
             </View>
@@ -307,7 +308,7 @@ export default function AdminComplaintsScreen() {
                   textAlign="right"
                 />
 
-                <Button title="تأكيد الحل" onPress={confirmResolve} loading={resolving} style={styles.submitBtn} />
+                <Button title="تأكيد الحل" onPress={confirmResolve} loading={resolveMutation.isPending} style={styles.submitBtn} />
               </ScrollView>
             ) : null}
           </View>

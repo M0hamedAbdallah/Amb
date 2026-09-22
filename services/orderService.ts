@@ -395,6 +395,23 @@ export const orderService = {
     return channel;
   },
 
+  /** Subscribe to ALL order changes (admin monitoring) — INSERTs and UPDATEs. */
+  subscribeToAllOrders(onChange: (order: Partial<Order>) => void) {
+    const channel = supabase
+      .channel('all_orders')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'orders',
+        },
+        (payload) => onChange((payload.new ?? payload.old) as Partial<Order>)
+      )
+      .subscribe();
+    return channel;
+  },
+
   /** Subscribe to ALL orders assigned to a vendor (NEW orders + status changes). */
   subscribeToVendorOrders(
     vendorId: string,

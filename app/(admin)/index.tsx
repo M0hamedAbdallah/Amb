@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useQuery } from '@tanstack/react-query';
 import { adminService } from '@/services/adminService';
+import { queryKeys } from '@/constants/queryKeys';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme';
 
 const MOCK_STATS = {
@@ -27,21 +29,22 @@ const MOCK_RECENT = [
 export default function AdminDashboard() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const [stats, setStats] = useState(MOCK_STATS);
-  const [refreshing, setRefreshing] = useState(false);
 
-  const loadStats = async () => {
-    const data = await adminService.getPlatformStats();
-    if (data.totalOrders > 0) setStats(data as any);
-  };
+  // Platform stats aggregate over everything; recomputing on every dashboard
+  // visit would hammer several big tables for numbers that move slowly.
+  // staleTime 5m means the dashboard shows cached stats from a recent visit
+  // and only refetches after 5 minutes (or on pull-to-refresh / revisit after
+  // cache expiry). Mock stats remain the pre-data and fallback content.
+  const { data: stats = MOCK_STATS, isRefetching, refetch } = useQuery({
+    queryKey: queryKeys.admin.stats,
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const data = await adminService.getPlatformStats();
+      return data.totalOrders > 0 ? (data as any) : MOCK_STATS;
+    },
+  });
 
-  useEffect(() => { loadStats(); }, []);
-
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    await loadStats();
-    setRefreshing(false);
-  };
+  const handleRefresh = () => { refetch(); };
 
   const KPI_CARDS = [
     { label: 'طلبات اليوم', value: stats.todayOrders, icon: 'shopping-cart', color: Colors.primary, sub: `${stats.totalOrders} إجمالي` },
@@ -57,7 +60,7 @@ export default function AdminDashboard() {
       showsVerticalScrollIndicator={false}
       refreshControl={(
         <RefreshControl
-          refreshing={refreshing}
+          refreshing={isRefetching}
           onRefresh={handleRefresh}
           tintColor={'#8B5CF6'}
           colors={['#8B5CF6']}

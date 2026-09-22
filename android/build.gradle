@@ -30,24 +30,30 @@ allprojects {
     google()
     mavenCentral()
     maven { url 'https://www.jitpack.io' }
-
-    // Mapbox Maps SDK v11 native binary — required by @rnmapbox/maps (added manually
-    // since expo prebuild was not run on this project; the @rnmapbox/maps config plugin
-    // would normally inject this block via withProjectGradle. No download token needed
-    // per Mapbox's removal of the requirement (see
-    // https://github.com/mapbox/mapbox-maps-flutter/issues/775).
-    maven {
-      url 'https://api.mapbox.com/downloads/v2/releases/maven'
-      authentication { basic(BasicAuthentication) }
-      credentials {
-        username = 'mapbox'
-        // Public anonymous access — Mapbox's v2 maven no longer requires a download token.
-        // Use an empty password to satisfy the BasicAuth scheme.
-        password = ''
-      }
-    }
   }
 }
 
 apply plugin: "expo-root-project"
 apply plugin: "com.facebook.react.rootproject"
+// @generated begin @rnmapbox/maps-v2-maven - expo prebuild (DO NOT MODIFY) sync-d4ccbfdff48fdba3138b02a8ba41b9722af001d8
+
+allprojects {
+  repositories {
+    maven {
+      url 'https://api.mapbox.com/downloads/v2/releases/maven'
+      // Authentication is no longer required as per Mapbox's removal of download token requirement
+      // See: https://github.com/mapbox/mapbox-maps-flutter/issues/775
+      // Keeping this as optional for backward compatibility
+      def token = project.properties['MAPBOX_DOWNLOADS_TOKEN'] ?: System.getenv('RNMAPBOX_MAPS_DOWNLOAD_TOKEN')
+      if (token) {
+        authentication { basic(BasicAuthentication) }
+        credentials {
+          username = 'mapbox'
+          password = token
+        }
+      }
+    }
+  }
+}
+
+// @generated end @rnmapbox/maps-v2-maven
